@@ -1,4 +1,4 @@
-###### Markdown file documenting the GWAS pipeline used for Sox7 Analysis
+### Markdown file documenting the GWAS pipeline used for Sox7 Analysis
 This will help in understanding and conveying what steps were taken and possibly in making a functional pipeline for future experiments
 
 ## Lane Information
@@ -15,7 +15,6 @@ Each sample has 2 fastq.gz files.
 files were renamed for simplicity
 
 ```bash
-#!/bin/bash
 
 WORKDIR=/setpath/
 cd ${WORKDIR}
@@ -37,7 +36,6 @@ Each sequence was trimmed using trimmomatic
 this was orgincally two scripts (trimmomatic.sh and trimAllSeq.sh) which I combined below and should work
 
 ```bash
-#!/bin/bash
 
 #script that feeds names of sequence files to trimmomatic with specified outputs
 
@@ -74,8 +72,6 @@ fastQC was then used to get QC on the trimmed reads
 a script (qcAllSeq.sh) was used to do qc on all 276 scripts at once
 
 ```bash
-#!/bin/bash
-
 #fastqcs all fastq files in a folder
 
 WORKDIR=$1
@@ -87,6 +83,7 @@ do
 	fastqc -t 8 ${fwdArray[$i-1]}
 done
 ```
+### Alignment
 
 ## Making Indexes for Alignment
 
@@ -98,5 +95,297 @@ Create an index of the reference genome
 bwa index -a bwtsw Danio_rerio.GRCz11.dna.primary_assembly.fa 
 ```
 
+## Alignment Using BWA
 
+Each FWD and REV sequence needs to be listed and fed to alignment command for BWA
 
+```bash
+# Makes a list of forward and reverse sequences for feeding to alignment program
+# This can be fed into any alignment program that uses simialr syntax for paired reads.
+# The first input in this script will be the alignment scripts
+
+WORKDIR=$2
+OUTPUTDIR=$3
+FWDSRCH=$4
+RVSRCH=$5
+LEN=$6
+cd ${WORKDIR}
+
+declare -a fwdArray=($(ls ${WORKDIR}/$FWDSRCH))
+declare -a revArray=($(ls ${WORKDIR}/$RVSRCH))
+arrayLength=${#fwdArray[*]}
+
+for (( i=1; i<${arrayLength}+1; i++ ));
+do
+        outputName=$(echo ${fwdArray[$i-1]:$6:6})
+        outputFile=$outputName.sam
+        opArray+=("${OUTPUTDIR}/$outputFile")
+	echo "$1 ${fwdArray[$i-1]} ${revArray[$i-1]} ${opArray[$i-1]}"
+done
+```
+and example output from this code looks like:
+```
+/mnt/home4/pthunga/IndelAnalysis/MappingReads/bwamem2P.sh /mnt/home4/pthunga/IndelAnalysis/TrimmedReads/finalTrimmed/s004_R1_1P.fastq.gz /mnt/home4/pthunga/IndelAnalysis/TrimmedReads/finalTrimmed/s004_R1_2P.fastq.gz /mnt/home4/pthunga/IndelAnalysis/MappingReads/final.bwa.output/s004_R1.sam
+```
+
+This script is the bwa code
+
+```bash
+#bwa mem alignment for specified forward and reverse sequence files
+FWD=$1
+REV=$2
+OUTPUT=$3
+id="${OUTPUT:49:6}" #cuts read groups out of output file name
+sm="${OUTPUT:49:6}" 
+#lb="${OUTPUT:6}"
+bwa mem -M -t 32 -R $(echo "@RG\tID:$id\tSM:$id\tLB:$id\tPL:ILLUMINA") /mnt/home4/djwallis/gcrz11/Danio_rerio.GRCz11.dna.primary_assembly.fa $FWD $REV > $OUTPUT
+```
+### GATK Preprocessing
+
+## Convert sam files to bam files for analysis
+
+First make a list of all sam files to convert to bam files. The first input can be whatever convert script.
+
+```bash
+
+WORKDIR=$2
+SRCH=$3
+cd ${WORKDIR}
+
+declare -a fwdArray=(${WORKDIR}/$SRCH)
+arrayLength=${#fwdArray[*]}
+
+#echo ${fwdArray[@]}
+
+for (( i=1; i<${arrayLength}+1; i++ ));
+do
+        echo "$1 ${fwdArray[$i-1]}"
+done
+```
+
+Send files to samtools for conversion.
+
+```bash
+
+#convert sam to bam
+
+SAM=$1
+OUTPUT=$2
+samtools view -S -b -@ 16 $SAM > $OUTPUT 
+```
+
+## GATK requires sorted bam files so the converted files need to be sorted
+
+Need to make another list of bams to sort
+
+```bash
+
+#makes list of bams to sort 
+
+WORKDIR=$2
+LEN=$3
+SRCH=$4
+cd ${WORKDIR}
+
+declare -a fwdArray=(${WORKDIR}/$SRCH)
+arrayLength=${#fwdArray[*]}
+
+#echo ${fwdArray[@]}
+
+for (( i=1; i<${arrayLength}+1; i++ ));
+do
+        outputName=$(echo ${fwdArray[$i-1]:$3:6})
+        outputFile=$outputName.sorted.bam
+	#textfile=$outputName.sorted.txt
+        echo "$1 ${fwdArray[$i-1]} $outputFile SORT_ORDER=coordinate"
+done
+```
+
+Use picard to sort files.
+
+```bash
+
+#picard command to sort sam files
+
+IN=$1
+OUT=$2
+java -jar ~/software/picard.jar SortSam \
+      I=$IN \
+      O=$OUT \
+      SORT_ORDER=coordinate
+ ```
+
+## Mark Duplicates in bam files for GATK
+
+This script marks duplicates and can be fed a list of files made the same way as the input script for sorting.
+The only difference is that you would pull files by a new extension.
+
+```bash
+
+#picard duplicate marker for bam files
+
+IN=$1
+OUT=$2
+MET=$3
+java -jar ~/software/picard.jar MarkDuplicates \
+      I=$IN \
+      O=$OUT \
+      M=$MET #file name for metrics text file   
+```
+## Index bam files after processing
+
+This script also can be easily fed a list of file names generated similarly to previous steps
+
+```bash
+IN=$1
+
+#picard bam indexer
+
+java -jar ~/software/picard.jar BuildBamIndex I=$IN
+```
+
+### Finally variant calling
+
+## GATK
+
+First generate a list of bam files to be called
+
+```bash
+
+WORKDIR=/mnt/home4/pthunga/IndelAnalysis/bamFiles/markedDups
+OUTDIR=/mnt/home4/pthunga/IndelAnalysis/calledVariants
+cd ${WORKDIR}
+
+for file in *.bam;
+do
+
+        outputName=$(echo ${WORKDIR}/${file%.*})
+        echo "/mnt/home4/pthunga/IndelAnalysis/scripts/GATK_HC.sh $outputName.bam $OUTDIR/${file%.*}.g.vcf"
+done
+```
+Use GATK to call variants and generate gvcf files for each sample
+On full sequence:
+
+```bash
+IN=$1
+OUT=$2
+
+#GATK HaplotypeCaller in gvcf mode
+
+export PATH=/usr/lib/jvm/java-8-oracle/jre/bin:$PATH 
+java -jar ~/software/GenomeAnalysisTK.jar -T HaplotypeCaller \
+	--emitRefConfidence GVCF \
+        -R ~/gcrz11/Danio_rerio.GRCz11.dna.primary_assembly.fa \
+        -I $IN \
+        -o $OUT 
+```
+
+Or on a single chr:
+
+```bash
+IN=$1
+OUT=$2
+
+#GATK haplotype caller script specifically for chr20
+
+java -jar ~/software/GenomeAnalysisTK.jar -T HaplotypeCaller \
+	--emitRefConfidence GVCF \
+        -R ~/gcrz11/Danio_rerio.GRCz11.dna.primary_assembly.fa \
+	-L 20 \
+        -I $IN \
+        -o $OUT \
+```
+
+These gvcf files can then be merged. This scripts takes a list as well. I think we know how to generate these by now.
+
+```bash
+#combines gvcf files from GATK
+#takes list of gvcfs as .list file
+
+export PATH=/usr/lib/jvm/java-8-oracle/jre/bin:$PATH
+
+java -jar ~/software/GenomeAnalysisTK.jar -T CombineGVCFs \
+    -R /home5/djwallis/gcrz11/Danio_rerio.GRCz11.dna.primary_assembly.fa \
+    --variant /home5/djwallis/GATK/completegcfs/abamectin_grcz11.list  \
+    -o /home5/djwallis/GATK/completegcfs/abamectin_GRCz11_full.g.vcf
+```
+
+Joint Genotyping is then done on the combined gvcf file.
+Joint Genotyping allows easy incorporation and removal of files as needed without having to redo all files.
+
+```bash
+#combines gvcf files from GATK
+#takes list of gvcfs as .list file
+
+export PATH=/usr/lib/jvm/java-8-oracle/jre/bin:$PATH
+
+java -jar ~/software/GenomeAnalysisTK.jar -T CombineGVCFs \
+    -R /home5/djwallis/gcrz11/Danio_rerio.GRCz11.dna.primary_assembly.fa \
+    --variant /home5/djwallis/GATK/completegcfs/abamectin_grcz11.list  \
+    -o /home5/djwallis/GATK/completegcfs/abamectin_GRCz11_full.g.vcf
+```
+
+Once genotyping is complete you can separate indels and SNPs for analysis
+
+INDELS:
+```bash
+FILE=$1
+OUT=$2
+
+#filters indels using specified paramters
+
+export PATH=/usr/lib/jvm/java-8-oracle/jre/bin:$PATH
+java -jar ~/software/GenomeAnalysisTK.jar \
+   -T VariantFiltration \
+   -R ~/gcrz11/Danio_rerio.GRCz11.dna.primary_assembly.fa \
+   -V $FILE \
+   --filterExpression "QD < 2.0 || FS > 200.0 || ReadPosRankSum < -20.0" \
+   --filterName "GATK_BP" \
+   -o $OUT 
+```
+
+SNPS:
+```bash
+FILE=$1
+OUT=$2
+
+#filters SNPs using specified parameters
+
+export PATH=/usr/lib/jvm/java-8-oracle/jre/bin:$PATH 
+java -jar ~/software/GenomeAnalysisTK.jar \
+   -T VariantFiltration \
+   -R ~/gcrz11/Danio_rerio.GRCz11.dna.primary_assembly.fa \
+   -V $FILE \
+   --filterExpression "QD < 2.0 || FS > 60.0 || MQ < 40.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0" \
+   --filterName "GATK_BP" \
+   -o $OUT 
+```
+
+PLINK was used for analysis to find SNPs and INDELs of interest
+
+First take filtered INDELS from ~/IndelAnalysis/Apr16/vcfs and get bed bim and fam files necessary to run association tests
+
+```bash
+plink1.9 --noweb --vcf ~/IndelAnalysis/Apr16/vcfs/chr20INDEL_filtered.vcf --out ~/IndelAnalysis/Apr16/plink/chr20INDEL_filtered
+```
+The bim file outputted here --> taken to R --> variants were numbered as 'indel1', 'indel2' and so on {this needs to be done because while adjusting for multiple test correction later, the output file will not contain base pair locrion info. It will only have chr number, variant ID and p values the updated bim file was loaded back here and renamed before running next step.
+
+The fam file outputted here --> taken to R --> phenotypes were added and FID & Individual ID were corrected and fixed fam file was uploaded back here and renamed as chr20INDEL_filtered.fam
+
+R code i used for that: OneDrive/ReifLab/IndelAnalysis/plink/plink_snp
+
+```r
+PREETHI CAN YOU PUT THE R CODE IN HERE
+```
+the following line can also be run on R using the shell:
+
+```r
+plink1.9 --bed chr20INDEL_filtered.bed --bim chr20INDEL_filtered.bim --fam chr20INDEL_filtered.fam --assoc fisher --adjust --allow-no-sex
+plink1.9 --bed chr20SNPs_filtered.bed --bim chr20SNPs_filtered.bim --fam chr20SNPs_filtered.fam --assoc fisher --adjust --allow-no-sex
+```
+assoc.fisher output file generated and then, this is converted to csv.
+
+```bash
+cat plink.assoc.fisher | sed -r 's/^\s+//g' | sed -r 's/\s+/,/g' > plink.assoc.fisher.csv
+cat plink.assoc.fisher.adjusted | sed -r 's/^\s+//g' | sed -r 's/\s+/,/g' > plink.assoc.fisher.adjusted.csv
+```
