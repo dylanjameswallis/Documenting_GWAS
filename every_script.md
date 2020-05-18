@@ -88,3 +88,15 @@ do
 done
 ```
 
+## Making Indexes for Alignment
+
+Create an index of the reference genome
+
+```bash
+# -a bwtsw option indicates the algorithm to use. Bwtsw is used for larger sequences.
+# GRCz11 is the references genome used. GRCz11 is the most recent for zebrafish currently.
+bwa index -a bwtsw Danio_rerio.GRCz11.dna.primary_assembly.fa 
+```
+
+
+
