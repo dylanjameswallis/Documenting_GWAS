@@ -2,7 +2,7 @@
 This will help in understanding and conveying what steps were taken and possibly in making a functional pipeline for future experiments
 
 ## Lane Information
-12 samples were run per lane, 8 lanes in total. (96 samples were run at once; 3 total runs. 12 samples from run 1 were resequenced in run 3. (96*3) - 12 = 276 ). (Just FYI: The rerun samples can be found @ /home4/pthunga/IndelAnalysis/TrimmedReads/finalTrimmed/omittedSequences/)
+12 samples were run per lane, 8 lanes in total. (96 samples were run at once; 3 total runs. 12 samples from run 1 were resequenced in run 3. (96*3) - 12 = 276 ). (Just FYI: The samples from R1 that were rerun can be found @ /home4/pthunga/IndelAnalysis/TrimmedReads/finalTrimmed/omittedSequences/)
 
 ## Fastq files
 Michele’s trimmed read files naming convention:
