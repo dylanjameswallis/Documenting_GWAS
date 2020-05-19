@@ -2,17 +2,20 @@
 This will help in understanding and conveying what steps were taken and possibly in making a functional pipeline for future experiments
 
 ## Lane Information
+12 samples were run per lane, 8 lanes in total. (96 samples were run at once; 3 total runs. 12 samples from run 1 were resequenced in run 3. (96*3) - 12 = 276 ). (Just FYI: The rerun samples can be found @ /home4/pthunga/IndelAnalysis/TrimmedReads/finalTrimmed/omittedSequences/)
 
-12 samples were run per lane, 8 lanes in total. (96 samples were run at once; 3 total runs. 12 samples from run 1 were resequenced in run 3. (96*3) - 12 = 276 ).
-
+## Fastq files
 Michele’s trimmed read files naming convention:
 
-lane1-s001-indexRPI1-ATCACG-97_R2-P2-L1-01_S1_L001_R1_001_1U.fastq.gz
-lane1-s001-indexRPI1-ATCACG-97_R2-P2-L1-01_S1_L001_R1_001_2U.fastq.gz
+	lane1-s001-indexRPI1-ATCACG-97_R2-P2-L1-01_S1_L001_R1_001_1U.fastq.gz
+	lane1-s001-indexRPI1-ATCACG-97_R2-P2-L1-01_S1_L001_R1_001_2U.fastq.gz
 
-Each sample has 2 fastq.gz files.
-
-files were renamed for simplicity
+Each sample has 2 fastq.gz files. These files were renamed for simplicity. The renamed files look like: 
+	s001_R1_1P.fastq.gz  s001_R1_2P.fastq.gz 
+where,
+s = sample #
+R = Run #
+1P and 2P represent the two paired end reads
 
 ```bash
 
@@ -33,7 +36,7 @@ done
 ## Trimming Sequences
 
 Each sequence was trimmed using trimmomatic
-this was orgincally two scripts (trimmomatic.sh and trimAllSeq.sh) which I combined below and should work
+this was orgincally two scripts (trimmomatic.sh and trimAllSeq.sh). The code chunk below combines these two scripts and should work: 
 
 ```bash
 
@@ -66,11 +69,11 @@ do
   ILLUMINACLIP:TruSeq3-PE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36
 done
 ```
+## Quality Control
 
-fastQC was then used to get QC on the trimmed reads
+fastQC was used to get QC reports on the trimmed reads
 
-a script (qcAllSeq.sh) was used to do qc on all 276 scripts at once
-
+(qcAllSeq.sh) was used to do qc on all 276 samples.  
 ```bash
 #fastqcs all fastq files in a folder
 
@@ -83,6 +86,15 @@ do
 	fastqc -t 8 ${fwdArray[$i-1]}
 done
 ```
+
+Checking individual QC reports can be time consuming. Alternatively, go to the directory containing the fastq files and run MultiQC. This would generate one report for all files. 
+The command to run MultiQC would look like:
+
+```
+multiqc .
+```
+The qc reports can be found @ /home4/pthunga/IndelAnalysis/TrimmedReads/qcReports as html files. 
+
 ### Alignment
 
 ## Making Indexes for Alignment
@@ -247,6 +259,7 @@ java -jar ~/software/picard.jar BuildBamIndex I=$IN
 ### Finally variant calling
 
 ## GATK
+Note that GATK requires a certain version of Java, so be sure to export it to your path!
 
 First generate a list of bam files to be called
 
@@ -361,23 +374,45 @@ java -jar ~/software/GenomeAnalysisTK.jar \
    -o $OUT 
 ```
 
+## Association analysis
 PLINK was used for analysis to find SNPs and INDELs of interest
 
-First take filtered INDELS from ~/IndelAnalysis/Apr16/vcfs and get bed bim and fam files necessary to run association tests
+In order to run association analysis, we need to make bed, bim and fam files from the VCF files. 
+
+To generate these, first take filtered INDELS from /home5/pthunga/IndelAnalysis/Apr16/vcfs and get the necessary bed bim and fam files using the following code:
 
 ```bash
 plink1.9 --noweb --vcf ~/IndelAnalysis/Apr16/vcfs/chr20INDEL_filtered.vcf --out ~/IndelAnalysis/Apr16/plink/chr20INDEL_filtered
 ```
-The bim file outputted here --> taken to R --> variants were numbered as 'indel1', 'indel2' and so on {this needs to be done because while adjusting for multiple test correction later, the output file will not contain base pair locrion info. It will only have chr number, variant ID and p values the updated bim file was loaded back here and renamed before running next step.
 
-The fam file outputted here --> taken to R --> phenotypes were added and FID & Individual ID were corrected and fixed fam file was uploaded back here and renamed as chr20INDEL_filtered.fam
+Since the variants we generated above are not annotated, the bim file outputted here was taken to R and the variants were numbered as 'indel1', 'indel2' and so on. This HAS to be done because while adjusting for multiple test correction later, the output file will not contain base pair location info. It will only have chr number, variant ID and p values. The updated bim file was loaded back here and renamed to chr20INDEL_filtered.bim before running the next step.
 
-R code i used for that: OneDrive/ReifLab/IndelAnalysis/plink/plink_snp
+Next, the fam file outputted here was also taken to R and phenotype info was added. The FID & Individual ID were corrected and fixed fam file was uploaded back here and renamed as chr20INDEL_filtered.fam
+
+R code i used for that: OneDrive/ReifLab/IndelAnalysis/plink/plink_indel
 
 ```r
-PREETHI CAN YOU PUT THE R CODE IN HERE
+setwd("C:/Users/thung/OneDrive/")
+
+#Step 1: Fixing bim file i.e. add variant ID in bim file
+bim = read.table('chr20INDEL_filtered.bim')
+var.ID = paste0('indel',1:nrow(bim))
+bim$V2 = var.ID
+##checking to see if indel of interest is present
+# bim[bim$V4 == 19065990,]
+
+write.table(bim,'chr20final.bim', col.names = FALSE, row.names = FALSE, quote = FALSE, sep="\t")
+
+#Step 2: Fixing fam file i.e. add phenotype info to the generated fam files
+#David shared this info with Dylan and Preethi over email (Subject of the email: "GxE Abamectin Affected/Unaffected status information")
+#Use that info to map the phenotypes back to the samples
+
+#Step 3: Once all required files are ready, run association analysis. This can be done from R by invoking the shell or directly on the terminal. 
+#To run it from R itself: 
+shell(paste0('plink --bed chr20INDEL_filtered.bed --bim chr20INDEL_filtered.bim --fam chr20INDEL_filtered.fam --assoc fisher --adjust --allow-no-sex'))
+
 ```
-the following line can also be run on R using the shell:
+Or run, 
 
 ```r
 plink1.9 --bed chr20INDEL_filtered.bed --bim chr20INDEL_filtered.bim --fam chr20INDEL_filtered.fam --assoc fisher --adjust --allow-no-sex
@@ -388,4 +423,9 @@ assoc.fisher output file generated and then, this is converted to csv.
 ```bash
 cat plink.assoc.fisher | sed -r 's/^\s+//g' | sed -r 's/\s+/,/g' > plink.assoc.fisher.csv
 cat plink.assoc.fisher.adjusted | sed -r 's/^\s+//g' | sed -r 's/\s+/,/g' > plink.assoc.fisher.adjusted.csv
+```
+Or can directly be loaded into R for analysis
+```r
+##Load output
+assoc.fish = read.table('plink.assoc.fisher')
 ```
